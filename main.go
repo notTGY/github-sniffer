@@ -32,7 +32,8 @@ var (
 
 // curl https://api.github.com/users/notTGY/repos
 // curl https://api.github.com/repos/notTGY/mojango/commits
-const base = "https://api.github.com/repos"
+const baseRepos = "https://api.github.com/repos"
+const baseUsers = "https://api.github.com/users"
 
 type Author struct {
   Email string `json:"email"`
@@ -40,15 +41,19 @@ type Author struct {
 type Commit struct {
   Author Author `json:"author"`
 }
-type DataPiece struct {
+type CommitDataPiece struct {
   Commit Commit `json:"commit"`
+}
+
+type RepoDataPiece struct {
+  FullName string `json:"full_name"`
 }
 
 type model struct {
 	focusIndex int
 	inputs     []textinput.Model
 	cursorMode cursor.Mode
-  url string
+
   isLoading bool
   data []string
   err error
@@ -58,43 +63,98 @@ type dataMsg struct{ data []string }
 type errMsg struct{ err error }
 func (e errMsg) Error() string { return e.err.Error() }
 
-func checkServer(url string) tea.Cmd {
-  return func() tea.Msg {
-    c := &http.Client{Timeout: 10 * time.Second}
-    res, err := c.Get(url)
-    if err != nil {
-      return errMsg{err}
-    }
-    defer res.Body.Close()
-    body, err := io.ReadAll(res.Body)
-    if err != nil {
-      return errMsg{err}
-    }
 
-    var commitData []DataPiece
-    err = json.Unmarshal(body, &commitData)
+func getRepos(user string) (error, []string) {
+  data := []string{}
+  c := &http.Client{Timeout: 10 * time.Second}
+  url := fmt.Sprintf("%s/%s/repos", baseUsers, user)
+  res, err := c.Get(url)
+  if err != nil {
+    return err, data
+  }
+  defer res.Body.Close()
+  body, err := io.ReadAll(res.Body)
+  if err != nil {
+    return err, data
+  }
+
+  var repoData []RepoDataPiece
+  err = json.Unmarshal(body, &repoData)
+  if err != nil {
+    return err, data
+  }
+
+  for _, d := range repoData {
+    repo := d.FullName
+    data = append(data, repo)
+  }
+
+  return nil, data
+}
+
+func getRepoEmails(fullName string) (error, []string) {
+  data := []string{}
+  c := &http.Client{Timeout: 10 * time.Second}
+  url := fmt.Sprintf("%s/%s/commits", baseRepos, fullName)
+  res, err := c.Get(url)
+  if err != nil {
+    return err, data
+  }
+  defer res.Body.Close()
+  body, err := io.ReadAll(res.Body)
+  if err != nil {
+    return err, data
+  }
+
+  var commitData []CommitDataPiece
+  err = json.Unmarshal(body, &commitData)
+  if err != nil {
+    return err, data
+  }
+
+  uniqueEmails := make(map[string]struct{})
+  for _, d := range commitData {
+    email := d.Commit.Author.Email
+    _, exists := uniqueEmails[email]
+    if !exists {
+      data = append(data, email)
+      uniqueEmails[email] = struct{}{}
+    }
+  }
+
+  return nil, data
+}
+
+func checkServer(user string) tea.Cmd {
+  return func() tea.Msg {
+    err, repos := getRepos(user)
     if err != nil {
       return errMsg{err}
     }
 
     data := []string{}
     uniqueEmails := make(map[string]struct{})
-    for _, d := range commitData {
-      email := d.Commit.Author.Email
-      _, exists := uniqueEmails[email]
-      if !exists {
-        data = append(data, email)
-        uniqueEmails[email] = struct{}{}
+    for _, repo := range repos {
+      err, repoEmails := getRepoEmails(repo)
+      if err != nil {
+        return errMsg{err}
       }
-    }
+      for _, email := range repoEmails {
+        _, exists := uniqueEmails[email]
+        if !exists {
+          data = append(data, email)
+          uniqueEmails[email] = struct{}{}
+        }
+      }
 
+    }
     return dataMsg{data}
   }
 }
 
 func initialModel() model {
 	m := model{
-		inputs: make([]textinput.Model, 2),
+		inputs: make([]textinput.Model, 1),
 	}
 
 	var t textinput.Model
@@ -104,14 +164,11 @@ func initialModel() model {
 		t.CharLimit = 32
 
 		switch i {
-		case 0:
-			t.Placeholder = "Nickname"
-			t.Focus()
-			t.PromptStyle = focusedStyle
-			t.TextStyle = focusedStyle
-		case 1:
-			t.Placeholder = "Repo"
-			t.CharLimit = 64
+      case 0:
+        t.Placeholder = "Nickname"
+        t.Focus()
+        t.PromptStyle = focusedStyle
+        t.TextStyle = focusedStyle
 		}
 
 		m.inputs[i] = t
@@ -159,13 +216,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// If so, exit.
 			if s == "enter" && m.focusIndex == len(m.inputs) {
         m.isLoading = true
-        m.url = fmt.Sprintf(
-          "%s/%s/%s/commits",
-          base,
-          m.inputs[0].Value(),
-          m.inputs[1].Value(),
-        )
-				return m, checkServer(m.url)
+				return m, checkServer(m.inputs[0].Value())
 			}
 
 			// Cycle indexes
@@ -223,8 +274,7 @@ func (m model) View() string {
     return fmt.Sprintf("\nWe had some trouble: %v\n\n", m.err)
   }
   if len(m.data) > 0 {
-    s := m.url + "\n"
-
+    s := "\n"
     for i, email := range m.data {
       s += fmt.Sprintf("%d.\t%s\n", i+1, email)
     }
