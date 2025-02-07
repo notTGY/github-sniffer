@@ -4,13 +4,16 @@ package main
 // from the Bubbles component library.
 
 import (
+  "context"
 	"fmt"
-	"os"
+  "flag"
   "io"
   "net/http"
   "time"
 	"strings"
   "encoding/json"
+  "sync"
+  "log"
 
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -55,6 +58,7 @@ type model struct {
 	cursorMode cursor.Mode
 
   isLoading bool
+  isFinished bool
   data []string
   err error
 }
@@ -63,12 +67,30 @@ type dataMsg struct{ data []string }
 type errMsg struct{ err error }
 func (e errMsg) Error() string { return e.err.Error() }
 
+var auth string
+var debug bool
+
 
 func getRepos(user string) (error, []string) {
+  _, cancel := context.WithTimeout(context.Background(), 10 * time.Second)
+  defer cancel()
+
   data := []string{}
   c := &http.Client{Timeout: 10 * time.Second}
+
   url := fmt.Sprintf("%s/%s/repos", baseUsers, user)
-  res, err := c.Get(url)
+  req, err := http.NewRequest("GET", url, nil)
+  if err != nil {
+    return err, data
+  }
+
+  if auth != "" {
+    req.Header.Set(
+      "Authorization",
+      fmt.Sprintf("Bearer %s", auth),
+    )
+  }
+  res, err := c.Do(req)
   if err != nil {
     return err, data
   }
@@ -81,6 +103,7 @@ func getRepos(user string) (error, []string) {
   var repoData []RepoDataPiece
   err = json.Unmarshal(body, &repoData)
   if err != nil {
+    log.Fatal(err, string(body))
     return err, data
   }
 
@@ -93,10 +116,21 @@ func getRepos(user string) (error, []string) {
 }
 
 func getRepoEmails(fullName string) (error, []string) {
+  _, cancel := context.WithTimeout(context.Background(), 10 * time.Second)
+  defer cancel()
+
   data := []string{}
   c := &http.Client{Timeout: 10 * time.Second}
   url := fmt.Sprintf("%s/%s/commits", baseRepos, fullName)
-  res, err := c.Get(url)
+  req, err := http.NewRequest("GET", url, nil)
+  if err != nil {
+    return err, data
+  }
+
+  if auth != "" {
+    req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", auth))
+  }
+  res, err := c.Do(req)
   if err != nil {
     return err, data
   }
@@ -125,28 +159,52 @@ func getRepoEmails(fullName string) (error, []string) {
   return nil, data
 }
 
+type Wrapper struct {
+  data []string
+}
+
 func checkServer(user string) tea.Cmd {
   return func() tea.Msg {
+    var wg sync.WaitGroup
+
     err, repos := getRepos(user)
     if err != nil {
       return errMsg{err}
     }
 
+    //repos = repos[:1]
+
+    repoEmailsChan := make(chan Wrapper, len(repos))
+    if debug {
+      fmt.Println()
+    }
+    for _, repo := range repos {
+      wg.Add(1)
+      go func(repo string, c chan Wrapper) {
+        defer wg.Done()
+        err, repoEmails := getRepoEmails(repo)
+        if err != nil {
+          log.Fatal(err)
+        }
+        if debug {
+          fmt.Printf("%s: %v\n", repo, repoEmails)
+        }
+        c <- Wrapper{data: repoEmails}
+      }(repo, repoEmailsChan)
+    }
+    wg.Wait()
+    close(repoEmailsChan)
+
     data := []string{}
     uniqueEmails := make(map[string]struct{})
-    for _, repo := range repos {
-      err, repoEmails := getRepoEmails(repo)
-      if err != nil {
-        return errMsg{err}
-      }
-      for _, email := range repoEmails {
+    for repoEmails := range repoEmailsChan {
+      for _, email := range repoEmails.data {
         _, exists := uniqueEmails[email]
         if !exists {
           data = append(data, email)
           uniqueEmails[email] = struct{}{}
         }
       }
-
     }
     return dataMsg{data}
   }
@@ -186,9 +244,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
     case dataMsg:
       m.data = msg.data
+      m.isFinished = true
       return m, tea.Quit
     case errMsg:
       m.err = msg
+      m.isFinished = true
       return m, tea.Quit
 
 	case tea.KeyMsg:
@@ -273,8 +333,8 @@ func (m model) View() string {
   if m.err != nil {
     return fmt.Sprintf("\nWe had some trouble: %v\n\n", m.err)
   }
-  if len(m.data) > 0 {
-    s := "\n"
+  if m.isFinished {
+    s := m.inputs[0].Value() + "\n"
     for i, email := range m.data {
       s += fmt.Sprintf("%d.\t%s\n", i+1, email)
     }
@@ -309,8 +369,10 @@ func (m model) View() string {
 }
 
 func main() {
+  flag.BoolVar(&debug, "debug", false, "Print every repo result")
+  flag.StringVar(&auth, "auth", "", "GitHub Bearer token")
+  flag.Parse()
 	if _, err := tea.NewProgram(initialModel()).Run(); err != nil {
-		fmt.Printf("could not start program: %s\n", err)
-		os.Exit(1)
+		log.Printf("could not start program: %s\n", err)
 	}
 }
