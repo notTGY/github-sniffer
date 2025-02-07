@@ -4,16 +4,16 @@ package main
 // from the Bubbles component library.
 
 import (
-  "context"
+	"context"
+	"encoding/json"
+	"flag"
 	"fmt"
-  "flag"
-  "io"
-  "net/http"
-  "time"
+	"io"
+	"log"
+	"net/http"
 	"strings"
-  "encoding/json"
-  "sync"
-  "log"
+	"sync"
+	"time"
 
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -39,17 +39,17 @@ const baseRepos = "https://api.github.com/repos"
 const baseUsers = "https://api.github.com/users"
 
 type Author struct {
-  Email string `json:"email"`
+	Email string `json:"email"`
 }
 type Commit struct {
-  Author Author `json:"author"`
+	Author Author `json:"author"`
 }
 type CommitDataPiece struct {
-  Commit Commit `json:"commit"`
+	Commit Commit `json:"commit"`
 }
 
 type RepoDataPiece struct {
-  FullName string `json:"full_name"`
+	FullName string `json:"full_name"`
 }
 
 type model struct {
@@ -57,157 +57,157 @@ type model struct {
 	inputs     []textinput.Model
 	cursorMode cursor.Mode
 
-  isLoading bool
-  isFinished bool
-  data []string
-  err error
+	isLoading  bool
+	isFinished bool
+	data       []string
+	err        error
 }
 
 type dataMsg struct{ data []string }
 type errMsg struct{ err error }
+
 func (e errMsg) Error() string { return e.err.Error() }
 
 var auth string
 var debug bool
 
-
 func getRepos(user string) (error, []string) {
-  _, cancel := context.WithTimeout(context.Background(), 10 * time.Second)
-  defer cancel()
+	_, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-  data := []string{}
-  c := &http.Client{Timeout: 10 * time.Second}
+	data := []string{}
+	c := &http.Client{Timeout: 10 * time.Second}
 
-  url := fmt.Sprintf("%s/%s/repos", baseUsers, user)
-  req, err := http.NewRequest("GET", url, nil)
-  if err != nil {
-    return err, data
-  }
+	url := fmt.Sprintf("%s/%s/repos", baseUsers, user)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err, data
+	}
 
-  if auth != "" {
-    req.Header.Set(
-      "Authorization",
-      fmt.Sprintf("Bearer %s", auth),
-    )
-  }
-  res, err := c.Do(req)
-  if err != nil {
-    return err, data
-  }
-  defer res.Body.Close()
-  body, err := io.ReadAll(res.Body)
-  if err != nil {
-    return err, data
-  }
+	if auth != "" {
+		req.Header.Set(
+			"Authorization",
+			fmt.Sprintf("Bearer %s", auth),
+		)
+	}
+	res, err := c.Do(req)
+	if err != nil {
+		return err, data
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err, data
+	}
 
-  var repoData []RepoDataPiece
-  err = json.Unmarshal(body, &repoData)
-  if err != nil {
-    log.Fatal(err, string(body))
-    return err, data
-  }
+	var repoData []RepoDataPiece
+	err = json.Unmarshal(body, &repoData)
+	if err != nil {
+		log.Fatal(err, string(body))
+		return err, data
+	}
 
-  for _, d := range repoData {
-    repo := d.FullName
-    data = append(data, repo)
-  }
+	for _, d := range repoData {
+		repo := d.FullName
+		data = append(data, repo)
+	}
 
-  return nil, data
+	return nil, data
 }
 
 func getRepoEmails(fullName string) (error, []string) {
-  _, cancel := context.WithTimeout(context.Background(), 10 * time.Second)
-  defer cancel()
+	_, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-  data := []string{}
-  c := &http.Client{Timeout: 10 * time.Second}
-  url := fmt.Sprintf("%s/%s/commits", baseRepos, fullName)
-  req, err := http.NewRequest("GET", url, nil)
-  if err != nil {
-    return err, data
-  }
+	data := []string{}
+	c := &http.Client{Timeout: 10 * time.Second}
+	url := fmt.Sprintf("%s/%s/commits", baseRepos, fullName)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err, data
+	}
 
-  if auth != "" {
-    req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", auth))
-  }
-  res, err := c.Do(req)
-  if err != nil {
-    return err, data
-  }
-  defer res.Body.Close()
-  body, err := io.ReadAll(res.Body)
-  if err != nil {
-    return err, data
-  }
+	if auth != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", auth))
+	}
+	res, err := c.Do(req)
+	if err != nil {
+		return err, data
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err, data
+	}
 
-  var commitData []CommitDataPiece
-  err = json.Unmarshal(body, &commitData)
-  if err != nil {
-    return err, data
-  }
+	var commitData []CommitDataPiece
+	err = json.Unmarshal(body, &commitData)
+	if err != nil {
+		return err, data
+	}
 
-  uniqueEmails := make(map[string]struct{})
-  for _, d := range commitData {
-    email := d.Commit.Author.Email
-    _, exists := uniqueEmails[email]
-    if !exists {
-      data = append(data, email)
-      uniqueEmails[email] = struct{}{}
-    }
-  }
+	uniqueEmails := make(map[string]struct{})
+	for _, d := range commitData {
+		email := d.Commit.Author.Email
+		_, exists := uniqueEmails[email]
+		if !exists {
+			data = append(data, email)
+			uniqueEmails[email] = struct{}{}
+		}
+	}
 
-  return nil, data
+	return nil, data
 }
 
 type Wrapper struct {
-  data []string
+	data []string
 }
 
 func checkServer(user string) tea.Cmd {
-  return func() tea.Msg {
-    var wg sync.WaitGroup
+	return func() tea.Msg {
+		var wg sync.WaitGroup
 
-    err, repos := getRepos(user)
-    if err != nil {
-      return errMsg{err}
-    }
+		err, repos := getRepos(user)
+		if err != nil {
+			return errMsg{err}
+		}
 
-    //repos = repos[:1]
+		//repos = repos[:1]
 
-    repoEmailsChan := make(chan Wrapper, len(repos))
-    if debug {
-      fmt.Println()
-    }
-    for _, repo := range repos {
-      wg.Add(1)
-      go func(repo string, c chan Wrapper) {
-        defer wg.Done()
-        err, repoEmails := getRepoEmails(repo)
-        if err != nil {
-          log.Fatal(err)
-        }
-        if debug {
-          fmt.Printf("%s: %v\n", repo, repoEmails)
-        }
-        c <- Wrapper{data: repoEmails}
-      }(repo, repoEmailsChan)
-    }
-    wg.Wait()
-    close(repoEmailsChan)
+		repoEmailsChan := make(chan Wrapper, len(repos))
+		if debug {
+			fmt.Println()
+		}
+		for _, repo := range repos {
+			wg.Add(1)
+			go func(repo string, c chan Wrapper) {
+				defer wg.Done()
+				err, repoEmails := getRepoEmails(repo)
+				if err != nil {
+					log.Fatal(err)
+				}
+				if debug {
+					fmt.Printf("%s: %v\n", repo, repoEmails)
+				}
+				c <- Wrapper{data: repoEmails}
+			}(repo, repoEmailsChan)
+		}
+		wg.Wait()
+		close(repoEmailsChan)
 
-    data := []string{}
-    uniqueEmails := make(map[string]struct{})
-    for repoEmails := range repoEmailsChan {
-      for _, email := range repoEmails.data {
-        _, exists := uniqueEmails[email]
-        if !exists {
-          data = append(data, email)
-          uniqueEmails[email] = struct{}{}
-        }
-      }
-    }
-    return dataMsg{data}
-  }
+		data := []string{}
+		uniqueEmails := make(map[string]struct{})
+		for repoEmails := range repoEmailsChan {
+			for _, email := range repoEmails.data {
+				_, exists := uniqueEmails[email]
+				if !exists {
+					data = append(data, email)
+					uniqueEmails[email] = struct{}{}
+				}
+			}
+		}
+		return dataMsg{data}
+	}
 }
 
 func initialModel() model {
@@ -222,11 +222,11 @@ func initialModel() model {
 		t.CharLimit = 32
 
 		switch i {
-      case 0:
-        t.Placeholder = "Nickname"
-        t.Focus()
-        t.PromptStyle = focusedStyle
-        t.TextStyle = focusedStyle
+		case 0:
+			t.Placeholder = "Nickname"
+			t.Focus()
+			t.PromptStyle = focusedStyle
+			t.TextStyle = focusedStyle
 		}
 
 		m.inputs[i] = t
@@ -242,14 +242,14 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
-    case dataMsg:
-      m.data = msg.data
-      m.isFinished = true
-      return m, tea.Quit
-    case errMsg:
-      m.err = msg
-      m.isFinished = true
-      return m, tea.Quit
+	case dataMsg:
+		m.data = msg.data
+		m.isFinished = true
+		return m, tea.Quit
+	case errMsg:
+		m.err = msg
+		m.isFinished = true
+		return m, tea.Quit
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -275,7 +275,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Did the user press enter while the submit button was focused?
 			// If so, exit.
 			if s == "enter" && m.focusIndex == len(m.inputs) {
-        m.isLoading = true
+				m.isLoading = true
 				return m, checkServer(m.inputs[0].Value())
 			}
 
@@ -330,21 +330,21 @@ func (m *model) updateInputs(msg tea.Msg) tea.Cmd {
 }
 
 func (m model) View() string {
-  if m.err != nil {
-    return fmt.Sprintf("\nWe had some trouble: %v\n\n", m.err)
-  }
-  if m.isFinished {
-    s := m.inputs[0].Value() + "\n"
-    for i, email := range m.data {
-      s += fmt.Sprintf("%d.\t%s\n", i+1, email)
-    }
+	if m.err != nil {
+		return fmt.Sprintf("\nWe had some trouble: %v\n\n", m.err)
+	}
+	if m.isFinished {
+		s := m.inputs[0].Value() + "\n"
+		for i, email := range m.data {
+			s += fmt.Sprintf("%d.\t%s\n", i+1, email)
+		}
 
-    return s + "\n\n"
-  }
+		return s + "\n\n"
+	}
 
-  if m.isLoading {
-    return "Loading..."
-  }
+	if m.isLoading {
+		return "Loading..."
+	}
 
 	var b strings.Builder
 
@@ -369,9 +369,9 @@ func (m model) View() string {
 }
 
 func main() {
-  flag.BoolVar(&debug, "debug", false, "Print every repo result")
-  flag.StringVar(&auth, "auth", "", "GitHub Bearer token")
-  flag.Parse()
+	flag.BoolVar(&debug, "debug", false, "Print every repo result")
+	flag.StringVar(&auth, "auth", "", "GitHub Bearer token")
+	flag.Parse()
 	if _, err := tea.NewProgram(initialModel()).Run(); err != nil {
 		log.Printf("could not start program: %s\n", err)
 	}
